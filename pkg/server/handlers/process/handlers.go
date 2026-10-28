@@ -98,11 +98,11 @@ func NewEventHandler(handler backends.RealtimeEventHandler) *EventHandler {
 	return &EventHandler{realHandler: handler}
 }
 
-func (e *EventHandler) WaitForProcess(executorType string, state int, processID string, location string, ctx context.Context) (*core.Process, error) {
+func (e *EventHandler) WaitForProcess(executorType string, executorName string, state int, processID string, location string, ctx context.Context) (*core.Process, error) {
 	if e.realHandler == nil {
 		return nil, nil
 	}
-	return e.realHandler.WaitForProcess(executorType, state, processID, location, ctx)
+	return e.realHandler.WaitForProcess(executorType, executorName, state, processID, location, ctx)
 }
 
 type Server interface {
@@ -420,7 +420,7 @@ func (h *Handlers) HandleAssignProcess(c backends.Context, recoveredID string, p
 		// No process available, wait for new processes if timeout is specified
 		if msg.Timeout > 0 {
 			// Wait for a new process event (fires when processes are submitted)
-			h.server.ProcessController().GetEventHandler().WaitForProcess(executor.Type, core.WAITING, "", executor.LocationName, ctx)
+			h.server.ProcessController().GetEventHandler().WaitForProcess(executor.Type, executor.Name, core.WAITING, "", executor.LocationName, ctx)
 			// Check if we timed out during the wait
 			select {
 			case <-ctx.Done():

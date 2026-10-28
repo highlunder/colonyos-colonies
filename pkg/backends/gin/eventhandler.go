@@ -46,6 +46,7 @@ import (
 type DefaultEventHandler struct {
 	listeners         map[string]map[string]chan *core.Process // target -> listenerID -> channel
 	processIDs        map[string]string                        // listenerID -> processID (for specific process listeners)
+	executorNames     map[string]string                        // listenerID -> executor name, so a wake-up can tell whether a listener satisfies a name-conditioned process
 	nextExecutor      map[string]int                           // target -> round-robin index for fair distribution
 	msgQueue          chan *message
 	idCounter         int
@@ -76,6 +77,7 @@ func CreateEventHandler(relayServer *cluster.RelayServer) backends.RealtimeEvent
 	handler := &DefaultEventHandler{}
 	handler.listeners = make(map[string]map[string]chan *core.Process)
 	handler.processIDs = make(map[string]string)
+	handler.executorNames = make(map[string]string)
 	handler.nextExecutor = make(map[string]int)
 	// Use a buffered channel to prevent blocking under high concurrency
 	handler.msgQueue = make(chan *message, 1000)
@@ -102,6 +104,7 @@ func CreateTestableEventHandler(relayServer *cluster.RelayServer) backends.Testa
 	handler := &DefaultEventHandler{}
 	handler.listeners = make(map[string]map[string]chan *core.Process)
 	handler.processIDs = make(map[string]string)
+	handler.executorNames = make(map[string]string)
 	handler.nextExecutor = make(map[string]int)
 	// Use a buffered channel to prevent blocking under high concurrency
 	handler.msgQueue = make(chan *message, 1000)
@@ -168,7 +171,7 @@ func (handler *DefaultEventHandler) target(executorType string, state int, locat
 	return executorType + strconv.Itoa(state) + location
 }
 
-func (handler *DefaultEventHandler) register(executorType string, state int, processID string, location string) (string, chan *core.Process) {
+func (handler *DefaultEventHandler) register(executorType string, executorName string, state int, processID string, location string) (string, chan *core.Process) {
 	t := handler.target(executorType, state, location)
 	if _, ok := handler.listeners[t]; !ok {
 		handler.listeners[t] = make(map[string]chan *core.Process)
@@ -180,6 +183,9 @@ func (handler *DefaultEventHandler) register(executorType string, state int, pro
 	if processID != "" {
 		handler.processIDs[listenerID] = processID
 	}
+	if executorName != "" {
+		handler.executorNames[listenerID] = executorName
+	}
 	handler.idCounter++
 	return listenerID, c
 }
@@ -189,11 +195,54 @@ func (handler *DefaultEventHandler) unregister(executorType string, state int, l
 	if _, ok := handler.listeners[t]; ok {
 		delete(handler.listeners[t], listenerID)
 		delete(handler.processIDs, listenerID)
+		delete(handler.executorNames, listenerID)
 	}
 
 	if len(handler.listeners[t]) == 0 {
 		delete(handler.listeners, t)
 	}
+}
+
+// addressedTo returns the executor names a process is addressed to, or nil when
+// it is for the general pool and any executor of the type may take it.
+//
+// ExecutorNames of ["*"] means the general pool. That is how the assignment SQL
+// reads it (`TARGET_EXECUTOR_NAMES = ARRAY['*']` is matched by the general-pool
+// branch alongside an empty array), so the wake-up has to read it the same way
+// or a process addressed to "*" would find no eligible listener and never be
+// woken at all.
+func addressedTo(process *core.Process) []string {
+	names := process.FunctionSpec.Conditions.ExecutorNames
+	if len(names) == 0 {
+		return nil
+	}
+	if len(names) == 1 && names[0] == "*" {
+		return nil
+	}
+	return names
+}
+
+// eligible narrows general listeners to those whose executor can satisfy a
+// name-addressed process. Returns nil when none can.
+//
+// A listener with no recorded name cannot be shown to match, so it is excluded:
+// Subscribe registers without one, and a client watching process state should
+// not absorb the single wake meant for the executor that can do the work.
+func (handler *DefaultEventHandler) eligible(listenerIDs []string, names []string) []string {
+	var out []string
+	for _, listenerID := range listenerIDs {
+		name, ok := handler.executorNames[listenerID]
+		if !ok {
+			continue
+		}
+		for _, want := range names {
+			if name == want {
+				out = append(out, listenerID)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // sendSignal distributes a process event to registered listeners using two-pass distribution.
@@ -214,6 +263,7 @@ func (handler *DefaultEventHandler) unregister(executorType string, state int, l
 func (handler *DefaultEventHandler) sendSignal(process *core.Process) {
 	msg := &message{reply: make(chan replyMessage, 100), handler: func(msg *message) {
 		processLocation := process.FunctionSpec.Conditions.LocationName
+		targetNames := addressedTo(process)
 		targetPrefix := process.FunctionSpec.Conditions.ExecutorType + strconv.Itoa(process.State)
 
 		// Build list of targets to signal based on process location:
@@ -277,6 +327,27 @@ func (handler *DefaultEventHandler) sendSignal(process *core.Process) {
 			// Sort for deterministic round-robin order (Go maps iterate randomly)
 			sort.Strings(generalListeners)
 
+			// A process addressed to specific executors can only be taken by
+			// those executors — the scheduler enforces the condition, so waking
+			// any other listener spends the one wake on an executor that will be
+			// refused, and the process then waits for its target's own long poll
+			// to expire. Narrow to the listeners that can take it.
+			//
+			// This changes WHICH listener is woken, never how many: exactly one
+			// wake per signal still holds, so the thundering herd this function
+			// exists to prevent cannot come back through here.
+			if len(targetNames) > 0 {
+				eligible := handler.eligible(generalListeners, targetNames)
+				if len(eligible) == 0 {
+					// Nobody who can take it is waiting. Waking a listener that
+					// cannot satisfy the condition would be a wasted wake-up and
+					// a wasted database update, and would not move the process
+					// along; its target picks it up on its next poll instead.
+					continue
+				}
+				generalListeners = eligible
+			}
+
 			// Get current round-robin index and ensure it's valid
 			idx := handler.nextExecutor[t] % len(generalListeners)
 
@@ -322,10 +393,10 @@ func (handler *DefaultEventHandler) Signal(process *core.Process) {
 }
 
 // WaitForProcess implements EventHandler interface
-func (handler *DefaultEventHandler) WaitForProcess(executorType string, state int, processID string, location string, ctx context.Context) (*core.Process, error) {
+func (handler *DefaultEventHandler) WaitForProcess(executorType string, executorName string, state int, processID string, location string, ctx context.Context) (*core.Process, error) {
 	// Register - use select to respect context timeout
 	msg := &message{reply: make(chan replyMessage, 100), handler: func(msg *message) {
-		listenerID, c := handler.register(executorType, state, processID, location)
+		listenerID, c := handler.register(executorType, executorName, state, processID, location)
 		r := replyMessage{processChan: c, listenerID: listenerID}
 		msg.reply <- r
 	}}
@@ -374,7 +445,10 @@ func (handler *DefaultEventHandler) WaitForProcess(executorType string, state in
 func (handler *DefaultEventHandler) Subscribe(executorType string, state int, processID string, location string, ctx context.Context) (chan *core.Process, chan error) {
 	// Register
 	msg := &message{reply: make(chan replyMessage, 100), handler: func(msg *message) {
-		listenerID, c := handler.register(executorType, state, processID, location)
+		// Subscribe is for clients watching process state, not executors waiting
+		// for work, so it registers without a name and is never the target of a
+		// name-conditioned wake-up.
+		listenerID, c := handler.register(executorType, "", state, processID, location)
 		r := replyMessage{processChan: c, listenerID: listenerID}
 		msg.reply <- r
 	}}

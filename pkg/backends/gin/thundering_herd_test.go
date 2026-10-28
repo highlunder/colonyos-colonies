@@ -38,7 +38,7 @@ func TestSingleWakeUp(t *testing.T) {
 			defer cancel()
 
 			// Simulate executor waiting for process
-			_, err := handler.WaitForProcess(executorType, core.WAITING, "", "", ctx)
+			_, err := handler.WaitForProcess(executorType, "", core.WAITING, "", "", ctx)
 			if err == nil {
 				// Executor woke up from signal
 				atomic.AddInt32(&wakeUpCount, 1)
@@ -91,7 +91,7 @@ func TestNoAmplification(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < numSignals; j++ {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				_, err := handler.WaitForProcess(executorType, core.WAITING, "", "", ctx)
+				_, err := handler.WaitForProcess(executorType, "", core.WAITING, "", "", ctx)
 				cancel()
 				if err == nil {
 					atomic.AddInt32(&totalWakeUps, 1)
@@ -146,7 +146,7 @@ func TestBufferedChannelExhaustion(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for {
-			_, err := handler.WaitForProcess(executorType, core.WAITING, "", "", ctx)
+			_, err := handler.WaitForProcess(executorType, "", core.WAITING, "", "", ctx)
 			if err != nil {
 				break
 			}
@@ -245,7 +245,7 @@ func TestProcessWithLocationWakesGeneralExecutor(t *testing.T) {
 		defer cancel()
 
 		// Executor waiting without location filter
-		_, err := handler.WaitForProcess(executorType, core.WAITING, "", "", ctx)
+		_, err := handler.WaitForProcess(executorType, "", core.WAITING, "", "", ctx)
 		if err == nil {
 			atomic.AddInt32(&wakeUpCount, 1)
 		}
@@ -292,7 +292,7 @@ func TestProcessWithLocationWakesLocationSpecificExecutor(t *testing.T) {
 		defer cancel()
 
 		// Executor waiting with location filter
-		_, err := handler.WaitForProcess(executorType, core.WAITING, "", location, ctx)
+		_, err := handler.WaitForProcess(executorType, "", core.WAITING, "", location, ctx)
 		if err == nil {
 			atomic.AddInt32(&wakeUpCount, 1)
 		}
@@ -338,7 +338,7 @@ func TestProcessWithoutLocationWakesAnyExecutor(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		_, err := handler.WaitForProcess(executorType, core.WAITING, "", "datacenter-1", ctx)
+		_, err := handler.WaitForProcess(executorType, "", core.WAITING, "", "datacenter-1", ctx)
 		if err == nil {
 			atomic.AddInt32(&totalWakeUp, 1)
 		}
@@ -379,7 +379,7 @@ func TestProcessWithLocationDoesNotWakeDifferentLocationExecutor(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
-		_, err := handler.WaitForProcess(executorType, core.WAITING, "", "datacenter-2", ctx)
+		_, err := handler.WaitForProcess(executorType, "", core.WAITING, "", "datacenter-2", ctx)
 		if err == nil {
 			atomic.AddInt32(&wakeUpCount, 1)
 		}
@@ -422,7 +422,7 @@ func TestMixedLocationExecutors(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		_, err := handler.WaitForProcess(executorType, core.WAITING, "", "", ctx)
+		_, err := handler.WaitForProcess(executorType, "", core.WAITING, "", "", ctx)
 		if err == nil {
 			atomic.AddInt32(&generalWakeUp, 1)
 		}
@@ -435,7 +435,7 @@ func TestMixedLocationExecutors(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		_, err := handler.WaitForProcess(executorType, core.WAITING, "", "datacenter-1", ctx)
+		_, err := handler.WaitForProcess(executorType, "", core.WAITING, "", "datacenter-1", ctx)
 		if err == nil {
 			atomic.AddInt32(&matchingWakeUp, 1)
 		}
@@ -448,7 +448,7 @@ func TestMixedLocationExecutors(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
-		_, err := handler.WaitForProcess(executorType, core.WAITING, "", "datacenter-2", ctx)
+		_, err := handler.WaitForProcess(executorType, "", core.WAITING, "", "datacenter-2", ctx)
 		if err == nil {
 			atomic.AddInt32(&differentWakeUp, 1)
 		}
@@ -499,7 +499,7 @@ func TestMultipleSignalsWithLocation(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < numSignals; j++ {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				_, err := handler.WaitForProcess(executorType, core.WAITING, "", "", ctx)
+				_, err := handler.WaitForProcess(executorType, "", core.WAITING, "", "", ctx)
 				cancel()
 				if err == nil {
 					atomic.AddInt32(&totalWakeUps, 1)

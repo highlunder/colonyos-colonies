@@ -145,7 +145,7 @@ type RealtimeEventHandler interface {
 	// Subscribe registers a subscription and returns channels for process events and errors
 	Subscribe(executorType string, state int, processID string, location string, ctx context.Context) (chan *core.Process, chan error)
 	// WaitForProcess waits for a specific process state change
-	WaitForProcess(executorType string, state int, processID string, location string, ctx context.Context) (*core.Process, error)
+	WaitForProcess(executorType string, executorName string, state int, processID string, location string, ctx context.Context) (*core.Process, error)
 	// Stop stops the event handler
 	Stop()
 }
